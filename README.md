@@ -7,7 +7,8 @@ The product scope is intentionally limited to registration, private profiles, pu
 self-reported streak timer, an alias-only leaderboard, streak reset, and completion certificates.
 See [`ROADMAP.md`](./ROADMAP.md) for the full product rules, architecture, and milestones.
 
-> **Status:** Milestone 1 (static UI foundation) complete. Authentication, database, live streaks,
+> **Status:** Milestone 1 (static UI foundation) complete. Milestone 2 adds the hosted database
+> schema, Row Level Security, public views, and typed Supabase clients. Authentication, live streaks,
 > and certificate issuance are not implemented yet. All participant data shown in the UI is sample
 > data and is labelled as such.
 
@@ -16,7 +17,7 @@ See [`ROADMAP.md`](./ROADMAP.md) for the full product rules, architecture, and m
 - [Next.js](https://nextjs.org) (App Router) + TypeScript
 - Tailwind CSS v4
 - shadcn/ui + Lucide icons
-- Supabase (Auth, PostgreSQL, Row Level Security) — wired up in Milestone 2
+- Supabase (Auth, PostgreSQL, Row Level Security)
 - Vercel for hosting
 
 ## Challenge timezone
@@ -55,36 +56,40 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## Environment variables
 
-| Variable                        | Exposure | Purpose                                         |
-| ------------------------------- | -------- | ----------------------------------------------- |
-| `NEXT_PUBLIC_SUPABASE_URL`      | Browser  | Supabase project URL                            |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Browser  | Supabase public/anon key (protected by RLS)     |
-| `SUPABASE_SERVICE_ROLE_KEY`     | Server   | Privileged operations; never expose to browser  |
-| `NEXT_PUBLIC_SITE_URL`          | Browser  | Canonical site URL for auth redirects and links |
+| Variable                               | Exposure | Purpose                                          |
+| -------------------------------------- | -------- | ------------------------------------------------ |
+| `NEXT_PUBLIC_SUPABASE_URL`             | Browser  | Supabase project URL                             |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Browser  | Supabase publishable key (protected by RLS)      |
+| `SUPABASE_SERVICE_ROLE_KEY`            | Server   | Privileged operations; never expose to browser   |
+| `NEXT_PUBLIC_SITE_URL`                 | Browser  | Canonical site URL for auth redirects and links  |
+| `SUPABASE_DB_URL`                      | CLI only | Hosted Postgres connection string for migrations |
 
 Notes:
 
 - Real values belong only in `.env.local` (ignored by Git) or your hosting provider's dashboard.
 - Never prefix `SUPABASE_SERVICE_ROLE_KEY` with `NEXT_PUBLIC_`.
-- If your installed Supabase SDK uses publishable keys, use the key names supported by that SDK.
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` is the canonical name. The app also accepts the legacy
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY` alias.
 - `.env.example` contains placeholders only.
 
 ## Scripts
 
-| Command             | Description                         |
-| ------------------- | ----------------------------------- |
-| `pnpm dev`          | Start the development server        |
-| `pnpm build`        | Create a production build           |
-| `pnpm start`        | Run the production build            |
-| `pnpm lint`         | Run ESLint                          |
-| `pnpm typecheck`    | Run the TypeScript compiler         |
-| `pnpm format`       | Format the repository with Prettier |
-| `pnpm format:check` | Check formatting without writing    |
+| Command               | Description                                    |
+| --------------------- | ---------------------------------------------- |
+| `pnpm dev`            | Start the development server                   |
+| `pnpm build`          | Create a production build                      |
+| `pnpm start`          | Run the production build                       |
+| `pnpm lint`           | Run ESLint                                     |
+| `pnpm typecheck`      | Run the TypeScript compiler                    |
+| `pnpm format`         | Format the repository with Prettier            |
+| `pnpm format:check`   | Check formatting without writing               |
+| `pnpm supabase:push`  | Apply migrations and regenerate database types |
+| `pnpm supabase:types` | Regenerate database types only                 |
+| `pnpm test:rls`       | Run the hosted RLS integration checks          |
 
 ## Supabase setup
 
-Milestone 0 does not connect to Supabase yet, but the project expects a Supabase project for
-Milestone 2. To prepare one:
+The hosted project is used by the app. If you are setting up a new project:
 
 1. Sign in at [supabase.com/dashboard](https://supabase.com/dashboard).
 2. Create a new project: choose an organization, name, database password, and region. Save the
@@ -93,8 +98,9 @@ Milestone 2. To prepare one:
 3. Wait for the project to finish provisioning.
 4. Open **Project Settings** (gear icon) → **API** (older dashboards) or **API Keys**.
 5. Copy the **Project URL** and paste it into `NEXT_PUBLIC_SUPABASE_URL` in `.env.local`.
-6. Copy the **anon/public** key and paste it into `NEXT_PUBLIC_SUPABASE_ANON_KEY`. If your project
-   shows a **publishable** key (`sb_publishable_...`) instead, use that value.
+6. Copy the **publishable** key (`sb_publishable_...`) and paste it into
+   `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. If your project only shows an **anon/public** key, use
+   `NEXT_PUBLIC_SUPABASE_ANON_KEY`; the app supports it as a legacy alias.
 7. Reveal and copy the **service_role** key (or **secret** key, `sb_secret_...`) and paste it into
    `SUPABASE_SERVICE_ROLE_KEY`. This key bypasses Row Level Security: keep it server-side only and
    never prefix it with `NEXT_PUBLIC_`.
@@ -104,12 +110,25 @@ Milestone 2. To prepare one:
    domain equivalents) to the redirect URLs.
 10. Restart `pnpm dev` after changing `.env.local`.
 
-The exact key names will be confirmed when the Supabase SDK is installed in Milestone 2. Real
-values belong only in `.env.local` or your hosting provider's environment settings, never in
-`.env.example` or Git.
+Real values belong only in `.env.local` or your hosting provider's environment settings, never in
+`.env.example` or Git. `src/proxy.ts` refreshes Supabase auth cookies on requests; route protection
+is added with the authentication milestone.
 
-Database migrations, RLS policies, and seed data will live in `supabase/migrations` and
-`supabase/seed.sql` when Milestone 2 begins.
+## Database migrations
+
+The service-role key cannot execute DDL. To apply migrations to the hosted project:
+
+1. Open **Supabase Dashboard → Connect** and copy the Postgres connection string.
+2. Add it to `.env.local` as `SUPABASE_DB_URL=...`. This is a CLI-only secret: never expose it to
+   the browser, never prefix it with `NEXT_PUBLIC_`, and never commit it.
+3. Run `pnpm supabase:push` to apply the migrations in `supabase/migrations` and regenerate
+   `src/types/database.ts`.
+4. Run `pnpm test:rls` to verify the policies with temporary test users, profiles, participations,
+   and certificates. The script cleans up after itself.
+5. See [`docs/DATABASE.md`](./docs/DATABASE.md) for the schema, RLS matrix, and public view columns.
+
+The required NNN 2026 challenge is inserted by a seed migration, so it is created by
+`pnpm supabase:push`. Do not add `SUPABASE_DB_URL` to Vercel; it is only needed for migrations.
 
 ## Deployment
 
@@ -123,14 +142,21 @@ include the deployed domain.
 src/
 ├── app/              # App Router pages, layouts, and global styles
 ├── components/       # Layout, shared, timer, leaderboard, certificate, shadcn/ui
+├── proxy.ts          # Supabase session refresh (Next.js 16 Proxy)
 └── lib/
     ├── challenge/    # Challenge configuration and canonical timezone
     ├── dates/        # Asia/Dhaka display formatting
     ├── leaderboard/  # Display formatting helpers
     ├── mock/         # Isolated sample data used by the preview
+    ├── supabase/     # Browser, server, and admin Supabase clients
     └── utils.ts
+src/types/            # Generated database types
 public/               # Static assets
-supabase/             # Migrations and seed data (Milestone 2)
+supabase/
+├── migrations/       # Schema, RLS, public views, and challenge seed
+└── seed.sql          # Local-only fixtures hook
+scripts/              # Migration/type sync helper
+tests/integration/    # Hosted RLS checks
 ```
 
 ## Privacy and security reminders
