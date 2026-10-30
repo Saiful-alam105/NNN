@@ -1,0 +1,2 @@
+-- The required challenge record is inserted by the seed migration.
+-- Add local-only fixtures below if needed.
